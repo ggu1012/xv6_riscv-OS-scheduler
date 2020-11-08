@@ -24,14 +24,6 @@ char* sbrk(int);
 int sleep(int);
 int uptime(void);
 
-/***************************** 
- * Assignment 2: System Call *
- * New system call formats:  *
- *****************************/
-int getppid(void);   // Get the process ID of parent process.
-int getpname(char*); // Get the process name.
-
-
 // ulib.c
 int stat(const char*, struct stat*);
 char* strcpy(char*, const char*);

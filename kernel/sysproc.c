@@ -24,21 +24,6 @@ sys_getpid(void)
 }
 
 uint64
-sys_getppid(void)
-{
-  return myproc()->parent->pid;
-}
-
-uint64
-sys_getpname(void)
-{ 
-  uint64 tmp = 0;    
-  argaddr(0, &tmp); // gets argument char* name as its address
-  int scs = copyout(myproc()->pagetable, tmp, myproc()->name, 16);
-  return (scs==0)? 0 : -1;
-}
-
-uint64
 sys_fork(void)
 {
   return fork();
