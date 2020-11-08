@@ -136,6 +136,10 @@ found:
 static void
 freeproc(struct proc *p)
 {
+  // Print out the runtime stats of queue occupancy.
+  printf("%s (pid=%d): Q2(%d%%), Q1(%d%%), Q0(%d%%)\n",
+         p->name, p->pid, 0, 0, 0);
+
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
