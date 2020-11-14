@@ -103,4 +103,18 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+    
+  int Qtime[3];
+  int priority;
+  struct proc *next;
 };
+
+
+// cycle list. one-way
+struct level{
+    struct proc *head;
+    struct proc *now;
+    struct proc *tail;  //dummy
+};
+
+extern struct level q[3];
