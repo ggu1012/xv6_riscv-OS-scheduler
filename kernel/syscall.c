@@ -130,6 +130,8 @@ void syscall(void)
   int num;
   struct proc *p = myproc();
 
+  p->change = 3;
+
   num = p->trapframe->a7;
   if (num > 0 && num < NELEM(syscalls) && syscalls[num])
   {

@@ -6,9 +6,17 @@
 #include "proc.h"
 #include "defs.h"
 
+// Two variables for movequeue function
+#define MOVE 0
+#define INSERT 1
+#define DELETE 2
+
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
+
+// Three-level queue
+struct proc *Q[3][NPROC];
 
 struct proc *initproc;
 
@@ -21,61 +29,7 @@ static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
 
-// Assignment 4
-struct level q[3];
-
-extern void insertproc(struct proc *p, int level);
-extern void deleteproc(struct proc *p, int level);
-extern struct proc* prevproc(struct proc *p, int level);
-static void getportion(struct proc *p);
-
-struct proc* prevproc(struct proc *p, int level)
-{
-  struct proc *tmp = q[level].head;
-  while (tmp->next != p)
-    tmp = tmp->next;
-  return tmp;
-}
-
-void insertproc(struct proc *p, int level)
-{
-  // if queue was empty, set p as head
-  if (q[level].head == 0)
-  {
-    q[level].head = p;
-    q[level].tail = p->next;
-    q[level].tail->next = q[level].head;
-    q[level].now = q[level].head;
-  }
-
-  else
-  {
-    // tail indicates the VALID tail, not dummy tail
-    struct proc* tail = prevproc(q[level].tail, level);
-    tail->next = p;
-    p->next = q[level].tail;
-  }
-}
-
-void deleteproc(struct proc *p, int level)
-{
-  // if p is head of queue
-  if(p==q[level].head)
-  {
-    q[level].head = q[level].head->next;
-    q[level].tail->next = q[level].head;
-  }
-
-  else
-  {
-    struct proc* _prev = prevproc(p, level);
-    _prev->next = p->next;
-  }
-
-  //reset proc
-  p->next = 0;
-}
-
+// Calculate time portion
 void getportion(struct proc *p)
 {
   int total = p->Qtime[2] + p->Qtime[1] + p->Qtime[0];
@@ -83,6 +37,45 @@ void getportion(struct proc *p)
   p->Qtime[2] = p->Qtime[2] * 100 / total;
   p->Qtime[1] = p->Qtime[1] * 100 / total;
   p->Qtime[0] = p->Qtime[0] * 100 / total;
+}
+
+// find where 'obj' process resides in
+// the Q[priority] queue
+int findproc(struct proc *obj, int priority)
+{
+  int index = 0;
+  while (1)
+  {
+    if (Q[priority][index] == obj)
+      break;
+    index++;
+  }
+  return index;
+}
+
+// move obj prcoess to Q[priority] queue
+void movequeue(struct proc *obj, int priority, int opt)
+{
+  if (opt != INSERT)
+  {
+    // if opt == MOVE
+    // 기존 큐에 있었던 obj 지우고 앞으로 밀기
+    // obj process is in Q[pos]
+    int pos = findproc(obj, obj->priority);
+    for (int i = pos; i < NPROC - 1; i++)
+      Q[obj->priority][i] = Q[obj->priority][i + 1];
+    Q[obj->priority][NPROC - 1] = 0;
+  }
+
+  if (opt != DELETE)
+  {
+    // 새로운 큐에 업데이트. insertback
+    // endstart indicates the position right after the tail
+    // which can be found by finding NULL process in the queue
+    int endstart = findproc(0, priority);
+    Q[priority][endstart] = obj;
+    obj->priority = priority;
+  }
 }
 
 // initialize the proc table at boot time.
@@ -212,7 +205,7 @@ freeproc(struct proc *p)
 
   // Print out the runtime stats of queue occupancy.
   printf("%s (pid=%d): Q2(%d%%), Q1(%d%%), Q0(%d%%)\n",
-         p->name, p->pid, p->Qtime[2], p->Qtime[1], p->Qtime[1]);
+         p->name, p->pid, p->Qtime[2], p->Qtime[1], p->Qtime[0]);
 
   if (p->trapframe)
     kfree((void *)p->trapframe);
@@ -228,6 +221,8 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+
+  movequeue(p, 0, DELETE);
 }
 
 // Create a user page table for a given process,
@@ -306,9 +301,8 @@ void userinit(void)
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
+  movequeue(p, 2, INSERT);
 
-  // Assignment 4
-  insertproc(p, 2);
   p->Qtime[2] = 0;
   p->Qtime[1] = 0;
   p->Qtime[0] = 0;
@@ -347,8 +341,6 @@ int fork(void)
   struct proc *np;
   struct proc *p = myproc();
 
-  printf("New Process....\n");
-
   // Allocate process.
   if ((np = allocproc()) == 0)
   {
@@ -384,14 +376,12 @@ int fork(void)
 
   np->state = RUNNABLE;
 
-  // Assignment 4
-  insertproc(np, 2);
+  movequeue(np, 2, INSERT);
   np->Qtime[2] = 0;
   np->Qtime[1] = 0;
   np->Qtime[0] = 0;
 
   release(&np->lock);
-
   return pid;
 }
 
@@ -481,11 +471,7 @@ void exit(int status)
 
   p->xstate = status;
   p->state = ZOMBIE;
-
-  // Assignment 4
-  printf("Q0\n");
-  deleteproc(p, p->priority);
-  insertproc(p, 0);
+  p->change = 2;
 
   release(&original_parent->lock);
 
@@ -564,83 +550,85 @@ void scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
+  int exec = 0;
+
   printf("Entered Scheduler\n");
+
+  c->proc = 0;
 
   for (;;)
   {
-    // Avoid deadlock by ensuring that devices can interrupt.
+
     intr_on();
+    // Avoid deadlock by ensuring that devices can interrupt.
 
-    ///// 돌아가야 할 process(p) 정하기 /////
-    while (q[2].now != 0)
+    for (p = proc; p < &proc[NPROC]; p++)
     {
-      printf("Q2\n");
-      p = q[2].now;
+      acquire(&p->lock);
+      if (p->change == 1)
+      {
+        movequeue(p, 1, MOVE);
+        p->change = 0;
+      }
+      else if (p->change == 2)
+      {
+        movequeue(p, 0, MOVE);
+        p->change = 0;
+      }
+      else if (p->change == 3)
+      {
+        movequeue(p, 2, MOVE);
+        p->change = 0;
+      }
+      release(&p->lock);
+    }
 
-      printf("p : %p\n", p);
+    // handle Q2 processes first
+    // First, find where the Q2 queue ends
+    int tail2 = findproc(0, 2) - 1;
+
+    for (int i = 0; i <= tail2; i++)
+    {
+      p = Q[2][i];
       acquire(&p->lock);
       if (p->state == RUNNABLE)
       {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
 
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
         c->proc = 0;
       }
       release(&p->lock);
-
-      q[2].now = q[2].now->next;
     }
 
-    q[2].now = q[2].head;
+    // After that, handle "one" Q1 process
+    // Q1 process is determined with the
+    // algorithm written in 2 Scheduling part
 
-    p = q[1].now;
-    if (q[1].now != 0)
+    // tail1 = -1 means Q[1] is empty,
+    // so set the variable as 0 in this case.
+    int tail1 = findproc(0, 1) - 1;
+    if (tail1 == -1)
+      continue;
+
+    p = Q[1][exec];
+
+    acquire(&p->lock);
+    if (p->state == RUNNABLE)
     {
-      acquire(&p->lock);
-      if (p->state == RUNNABLE)
-      {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-      }
-      release(&p->lock);
-
-      q[1].now = q[1].now->next;
+      p->state = RUNNING;
+      c->proc = p;
+      swtch(&c->context, &p->context);
+      c->proc = 0;
     }
+    release(&p->lock);
+
+    if (exec < tail1)
+      exec++;
     else
-      q[1].now = q[1].head;
+      exec = 0;
 
-    /////////////////////////////////////////
-
-    // for(p = proc; p < &proc[NPROC]; p++) {
-    //   acquire(&p->lock);
-    //   if(p->state == RUNNABLE) {
-    //     // Switch to chosen process.  It is the process's job
-    //     // to release its lock and then reacquire it
-    //     // before jumping back to us.
-    //     p->state = RUNNING;
-    //     c->proc = p;
-    //     swtch(&c->context, &p->context);
-
-    //     // Process is done running for now.
-    //     // It should have changed its p->state before coming back.
-    //     c->proc = 0;
-    //   }
-    //   release(&p->lock);
-    // }
   }
 }
 
@@ -680,14 +668,13 @@ void yield(void)
   // Assignment 4
   if (p->priority == 2)
   {
-    deleteproc(p, 2);
-    insertproc(p, 1);
+    p->change = 1;
     (p->Qtime[2])++;
   }
   else if (p->priority == 1)
     (p->Qtime[1])++;
   else if (p->priority == 0)
-    (p->Qtime[0]++);
+   (p->Qtime[0]++);
 
   sched();
   release(&p->lock);
@@ -736,6 +723,8 @@ void sleep(void *chan, struct spinlock *lk)
   p->chan = chan;
   p->state = SLEEPING;
 
+  p->change = 2;
+
   sched();
 
   // Tidy up.
@@ -747,11 +736,6 @@ void sleep(void *chan, struct spinlock *lk)
     release(&p->lock);
     acquire(lk);
   }
-
-  // Assignment 4
-  printf("Sleep %s %d\n", p->name, p->priority);
-  deleteproc(p, p->priority);
-  insertproc(p, 0);
 }
 
 // Wake up all processes sleeping on chan.
@@ -765,10 +749,8 @@ void wakeup(void *chan)
     acquire(&p->lock);
     if (p->state == SLEEPING && p->chan == chan)
     {
-      printf("WakeUp %s\n", p->name);
       p->state = RUNNABLE;
-      deleteproc(p, p->priority);
-      insertproc(p, 2);
+      p->change = 3;
     }
     release(&p->lock);
   }
@@ -784,8 +766,7 @@ wakeup1(struct proc *p)
   if (p->chan == p && p->state == SLEEPING)
   {
     p->state = RUNNABLE;
-    deleteproc(p, p->priority);
-    insertproc(p, 2);
+    p->change = 3;
   }
 }
 
@@ -806,8 +787,7 @@ int kill(int pid)
       {
         // Wake process from sleep().
         p->state = RUNNABLE;
-        deleteproc(p, p->priority);
-        insertproc(p, 2);
+        p->change = 3;
       }
       release(&p->lock);
       return 0;
