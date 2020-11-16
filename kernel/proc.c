@@ -33,7 +33,7 @@ extern char trampoline[]; // trampoline.S
 void getportion(struct proc *p)
 {
   int total = p->Qtime[2] + p->Qtime[1] + p->Qtime[0];
-
+  // printf("total %dms Q1 %dms Q2 %dms Q3 %dms\n", total, p->Qtime[2], p->Qtime[1], p->Qtime[0]);
   p->Qtime[2] = p->Qtime[2] * 100 / total;
   p->Qtime[1] = p->Qtime[1] * 100 / total;
   p->Qtime[0] = p->Qtime[0] * 100 / total;
@@ -56,6 +56,7 @@ int findproc(struct proc *obj, int priority)
 // move obj prcoess to Q[priority] queue
 void movequeue(struct proc *obj, int priority, int opt)
 {
+
   if (opt != INSERT)
   {
     // if opt == MOVE
@@ -76,6 +77,8 @@ void movequeue(struct proc *obj, int priority, int opt)
     Q[priority][endstart] = obj;
     obj->priority = priority;
   }
+
+  obj->change = 0;
 }
 
 // initialize the proc table at boot time.
@@ -568,17 +571,14 @@ void scheduler(void)
       if (p->change == 1)
       {
         movequeue(p, 1, MOVE);
-        p->change = 0;
       }
       else if (p->change == 2)
       {
         movequeue(p, 0, MOVE);
-        p->change = 0;
       }
       else if (p->change == 3)
       {
         movequeue(p, 2, MOVE);
-        p->change = 0;
       }
       release(&p->lock);
     }
@@ -606,13 +606,16 @@ void scheduler(void)
     // Q1 process is determined with the
     // algorithm written in 2 Scheduling part
 
-    // tail1 = -1 means Q[1] is empty,
-    // so set the variable as 0 in this case.
-    int tail1 = findproc(0, 1) - 1;
-    if (tail1 == -1)
-      continue;
-
     p = Q[1][exec];
+
+    // if Q[1][exec] == 0,
+    // it means p reached end of Q[1]
+    // or Q[1] is empty, so continue to avoid executing NULL pointer
+    if (p == 0)
+    {
+      exec = 0;
+      continue;
+    }
 
     acquire(&p->lock);
     if (p->state == RUNNABLE)
@@ -624,11 +627,8 @@ void scheduler(void)
     }
     release(&p->lock);
 
-    if (exec < tail1)
-      exec++;
-    else
-      exec = 0;
-
+    // to the next Q[1] process
+    exec++;
   }
 }
 
@@ -673,8 +673,6 @@ void yield(void)
   }
   else if (p->priority == 1)
     (p->Qtime[1])++;
-  else if (p->priority == 0)
-   (p->Qtime[0]++);
 
   sched();
   release(&p->lock);
@@ -723,7 +721,10 @@ void sleep(void *chan, struct spinlock *lk)
   p->chan = chan;
   p->state = SLEEPING;
 
+  // move from Q2|Q1 to Q0
   p->change = 2;
+  // set sleep start time
+  p->zzstart = ticks;
 
   sched();
 
@@ -751,6 +752,8 @@ void wakeup(void *chan)
     {
       p->state = RUNNABLE;
       p->change = 3;
+      // total sleep time = existing sleep'd time + end - start
+      p->Qtime[0] = p->Qtime[0] + ticks - p->zzstart;
     }
     release(&p->lock);
   }
@@ -767,6 +770,7 @@ wakeup1(struct proc *p)
   {
     p->state = RUNNABLE;
     p->change = 3;
+    p->Qtime[0] = p->Qtime[0] + ticks - p->zzstart;
   }
 }
 
@@ -788,6 +792,7 @@ int kill(int pid)
         // Wake process from sleep().
         p->state = RUNNABLE;
         p->change = 3;
+        p->Qtime[0] = p->Qtime[0] + ticks - p->zzstart;
       }
       release(&p->lock);
       return 0;
