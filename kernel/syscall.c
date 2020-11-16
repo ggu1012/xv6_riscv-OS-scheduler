@@ -130,6 +130,9 @@ void syscall(void)
   int num;
   struct proc *p = myproc();
 
+  // Assignment 4
+  // when syscall is invoked, 
+  // move to Q2 process
   p->change = 3;
 
   num = p->trapframe->a7;

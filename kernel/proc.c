@@ -7,15 +7,16 @@
 #include "defs.h"
 
 // Two variables for movequeue function
-#define MOVE 0
-#define INSERT 1
-#define DELETE 2
+#define MOVE 0   // move from one queue to another
+#define INSERT 1 // insert process in empty queue
+#define DELETE 2 // delete process from the queue
 
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
 
 // Three-level queue
+// each queue has 64 processes
 struct proc *Q[3][NPROC];
 
 struct proc *initproc;
@@ -33,7 +34,7 @@ extern char trampoline[]; // trampoline.S
 void getportion(struct proc *p)
 {
   int total = p->Qtime[2] + p->Qtime[1] + p->Qtime[0];
-
+  printf("total %dms Q1 %dms Q2 %dms Q3 %dms\n", total, p->Qtime[2], p->Qtime[1], p->Qtime[0]);
   p->Qtime[2] = p->Qtime[2] * 100 / total;
   p->Qtime[1] = p->Qtime[1] * 100 / total;
   p->Qtime[0] = p->Qtime[0] * 100 / total;
@@ -53,29 +54,36 @@ int findproc(struct proc *obj, int priority)
   return index;
 }
 
-// move obj prcoess to Q[priority] queue
+// handle process change
 void movequeue(struct proc *obj, int priority, int opt)
 {
+  // INSERT means pushing process to empty process
+  // so doesn't need to handle this operation
   if (opt != INSERT)
   {
-    // if opt == MOVE
-    // 기존 큐에 있었던 obj 지우고 앞으로 밀기
-    // obj process is in Q[pos]
+    // delete the obj process from queue where it was in
+    // and pull up the processes behind
+    // obj process is in Q[obj.priority][pos]
     int pos = findproc(obj, obj->priority);
     for (int i = pos; i < NPROC - 1; i++)
       Q[obj->priority][i] = Q[obj->priority][i + 1];
     Q[obj->priority][NPROC - 1] = 0;
   }
 
+  // DELETE means just delete the process from all Qs,
+  // so doesn't have to handle this operation
   if (opt != DELETE)
   {
-    // 새로운 큐에 업데이트. insertback
+    // insert obj process in another queue. insertback
     // endstart indicates the position right after the tail
     // which can be found by finding NULL process in the queue
     int endstart = findproc(0, priority);
     Q[priority][endstart] = obj;
     obj->priority = priority;
   }
+
+  // reset change variable
+  obj->change = 0;
 }
 
 // initialize the proc table at boot time.
@@ -222,6 +230,13 @@ freeproc(struct proc *p)
   p->xstate = 0;
   p->state = UNUSED;
 
+  // reset added variables for this assignment
+  p->change = 0;
+  p->Qtime[2] = 0;
+  p->Qtime[1] = 0;
+  p->Qtime[0] = 0;
+  p->priority = 0;
+  // delete from Q[]
   movequeue(p, 0, DELETE);
 }
 
@@ -301,8 +316,11 @@ void userinit(void)
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
+
+  // insert init process in Q2
   movequeue(p, 2, INSERT);
 
+  // set timer
   p->Qtime[2] = 0;
   p->Qtime[1] = 0;
   p->Qtime[0] = 0;
@@ -376,7 +394,10 @@ int fork(void)
 
   np->state = RUNNABLE;
 
+  // insert new process in Q2
   movequeue(np, 2, INSERT);
+
+  // set timer
   np->Qtime[2] = 0;
   np->Qtime[1] = 0;
   np->Qtime[0] = 0;
@@ -471,7 +492,12 @@ void exit(int status)
 
   p->xstate = status;
   p->state = ZOMBIE;
+
+  // when it is zombie,
+  // should be moved to Q0
+  // ZOMBIE time count starts
   p->change = 2;
+  p->zzstart = ticks;
 
   release(&original_parent->lock);
 
@@ -518,6 +544,8 @@ int wait(uint64 addr)
             release(&p->lock);
             return -1;
           }
+          // ZOMBIE runtime count
+          np->Qtime[0] = np->Qtime[0] + ticks - p->zzstart;
           freeproc(np);
           release(&np->lock);
           release(&p->lock);
@@ -550,9 +578,10 @@ void scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
-  int exec = 0;
 
-  printf("Entered Scheduler\n");
+  // exec is used to determine
+  // which Q1 process should be executed
+  int exec = 0;
 
   c->proc = 0;
 
@@ -562,31 +591,35 @@ void scheduler(void)
     intr_on();
     // Avoid deadlock by ensuring that devices can interrupt.
 
+    // First, handle the priority change of the processes
     for (p = proc; p < &proc[NPROC]; p++)
     {
       acquire(&p->lock);
-      if (p->change == 1)
+      // proc.h
+      // change = 1  Q2 to Q1
+      // change = 2  Q2|Q1 to Q0
+      // change = 3  Q0|Q1 to Q2
+      switch (p->change)
       {
+      case 1:
         movequeue(p, 1, MOVE);
-        p->change = 0;
-      }
-      else if (p->change == 2)
-      {
+        break;
+      case 2:
         movequeue(p, 0, MOVE);
-        p->change = 0;
-      }
-      else if (p->change == 3)
-      {
+        break;
+      case 3:
         movequeue(p, 2, MOVE);
-        p->change = 0;
+        break;
       }
       release(&p->lock);
     }
 
     // handle Q2 processes first
-    // First, find where the Q2 queue ends
+    // find where the Q2 queue ends
     int tail2 = findproc(0, 2) - 1;
+    // Now, Q[2][tail2] means the tail process in Q2
 
+    // execute Q2 processes
     for (int i = 0; i <= tail2; i++)
     {
       p = Q[2][i];
@@ -602,18 +635,22 @@ void scheduler(void)
       release(&p->lock);
     }
 
-    // After that, handle "one" Q1 process
-    // Q1 process is determined with the
-    // algorithm written in 2 Scheduling part
-
-    // tail1 = -1 means Q[1] is empty,
-    // so set the variable as 0 in this case.
-    int tail1 = findproc(0, 1) - 1;
-    if (tail1 == -1)
-      continue;
+    // After that, handle "one" Q1 process (Q[1][exec])
+    // Q1 process is determined with the algorithm
+    // written in 2 Scheduling part
 
     p = Q[1][exec];
 
+    // if Q[1][exec] == 0,
+    // it means p reached end of Q[1]
+    // or Q[1] is empty, so continue to avoid executing NULL pointer
+    if (p == 0)
+    {
+      exec = 0;
+      continue;
+    }
+
+    // execute Q[1][exec] process
     acquire(&p->lock);
     if (p->state == RUNNABLE)
     {
@@ -624,11 +661,8 @@ void scheduler(void)
     }
     release(&p->lock);
 
-    if (exec < tail1)
-      exec++;
-    else
-      exec = 0;
-
+    // move to the next Q[1] process
+    exec++;
   }
 }
 
@@ -665,16 +699,18 @@ void yield(void)
   acquire(&p->lock);
   p->state = RUNNABLE;
 
-  // Assignment 4
+  // If priority = 2, 
+  // it means process used all interval
+  // so goes down to Q[1] process
   if (p->priority == 2)
   {
     p->change = 1;
+    // timer count
     (p->Qtime[2])++;
   }
   else if (p->priority == 1)
+    // timer count
     (p->Qtime[1])++;
-  else if (p->priority == 0)
-   (p->Qtime[0]++);
 
   sched();
   release(&p->lock);
@@ -723,7 +759,10 @@ void sleep(void *chan, struct spinlock *lk)
   p->chan = chan;
   p->state = SLEEPING;
 
+  // move from Q2|Q1 to Q0
   p->change = 2;
+  // set sleep start time
+  p->zzstart = ticks;
 
   sched();
 
@@ -750,7 +789,10 @@ void wakeup(void *chan)
     if (p->state == SLEEPING && p->chan == chan)
     {
       p->state = RUNNABLE;
+      // should be moved to Q2
       p->change = 3;
+      // total sleep time = existing sleep'd time + waketime - zzstart
+      p->Qtime[0] = p->Qtime[0] + ticks - p->zzstart;
     }
     release(&p->lock);
   }
@@ -766,7 +808,10 @@ wakeup1(struct proc *p)
   if (p->chan == p && p->state == SLEEPING)
   {
     p->state = RUNNABLE;
+    // should be moved to Q2
     p->change = 3;
+    // total sleep time = existing sleep'd time + waketime - zzstart
+    p->Qtime[0] = p->Qtime[0] + ticks - p->zzstart;
   }
 }
 
@@ -787,7 +832,10 @@ int kill(int pid)
       {
         // Wake process from sleep().
         p->state = RUNNABLE;
+        // should be moved to Q2
         p->change = 3;
+        // total sleep time = existing sleep'd time + waketime - zzstart
+        p->Qtime[0] = p->Qtime[0] + ticks - p->zzstart;
       }
       release(&p->lock);
       return 0;
