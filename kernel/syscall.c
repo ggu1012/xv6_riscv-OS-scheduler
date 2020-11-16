@@ -131,9 +131,12 @@ void syscall(void)
   struct proc *p = myproc();
 
   // Assignment 4
-  // when syscall is invoked, 
+  // when syscall is invoked and
+  // its priority was not 2,
   // move to Q2 process
-  p->change = 3;
+  printf("syscall at %d\n", ticks);
+  if(p->priority != 2)
+    p->change    = 3;
 
   num = p->trapframe->a7;
   if (num > 0 && num < NELEM(syscalls) && syscalls[num])

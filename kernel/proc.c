@@ -19,6 +19,9 @@ struct proc proc[NPROC];
 // each queue has 64 processes
 struct proc *Q[3][NPROC];
 
+// records queue which process was executed
+// in a time slice
+
 struct proc *initproc;
 
 int nextpid = 1;
@@ -34,7 +37,6 @@ extern char trampoline[]; // trampoline.S
 void getportion(struct proc *p)
 {
   int total = p->Qtime[2] + p->Qtime[1] + p->Qtime[0];
-  printf("total %dms Q1 %dms Q2 %dms Q3 %dms\n", total, p->Qtime[2], p->Qtime[1], p->Qtime[0]);
   p->Qtime[2] = p->Qtime[2] * 100 / total;
   p->Qtime[1] = p->Qtime[1] * 100 / total;
   p->Qtime[0] = p->Qtime[0] * 100 / total;
@@ -208,7 +210,6 @@ found:
 static void
 freeproc(struct proc *p)
 {
-
   getportion(p);
 
   // Print out the runtime stats of queue occupancy.
@@ -497,7 +498,6 @@ void exit(int status)
   // should be moved to Q0
   // ZOMBIE time count starts
   p->change = 2;
-  p->zzstart = ticks;
 
   release(&original_parent->lock);
 
@@ -544,8 +544,7 @@ int wait(uint64 addr)
             release(&p->lock);
             return -1;
           }
-          // ZOMBIE runtime count
-          np->Qtime[0] = np->Qtime[0] + ticks - p->zzstart;
+
           freeproc(np);
           release(&np->lock);
           release(&p->lock);
@@ -595,6 +594,7 @@ void scheduler(void)
     for (p = proc; p < &proc[NPROC]; p++)
     {
       acquire(&p->lock);
+
       // proc.h
       // change = 1  Q2 to Q1
       // change = 2  Q2|Q1 to Q0
@@ -611,6 +611,20 @@ void scheduler(void)
         movequeue(p, 2, MOVE);
         break;
       }
+
+      // to check the execution time portion
+      // if p->state is not UNUSED, check which queue it is in,
+      // and count its time
+      if (p->state != UNUSED)
+      {
+        if (p->priority == 2)
+          (p->Qtime[2])++;
+        else if (p->priority == 1)
+          (p->Qtime[1])++;
+        else if (p->priority == 0)
+          (p->Qtime[0])++;
+      }
+
       release(&p->lock);
     }
 
@@ -696,21 +710,19 @@ void sched(void)
 void yield(void)
 {
   struct proc *p = myproc();
+
+  printf("Q%d %s %d\n", p->priority, p->name, ticks);
+
   acquire(&p->lock);
   p->state = RUNNABLE;
 
-  // If priority = 2, 
-  // it means process used all interval
+  // If priority = 2,
+  // it means process used all interval in Q2
   // so goes down to Q[1] process
   if (p->priority == 2)
   {
     p->change = 1;
-    // timer count
-    (p->Qtime[2])++;
   }
-  else if (p->priority == 1)
-    // timer count
-    (p->Qtime[1])++;
 
   sched();
   release(&p->lock);
@@ -761,8 +773,6 @@ void sleep(void *chan, struct spinlock *lk)
 
   // move from Q2|Q1 to Q0
   p->change = 2;
-  // set sleep start time
-  p->zzstart = ticks;
 
   sched();
 
@@ -791,8 +801,6 @@ void wakeup(void *chan)
       p->state = RUNNABLE;
       // should be moved to Q2
       p->change = 3;
-      // total sleep time = existing sleep'd time + waketime - zzstart
-      p->Qtime[0] = p->Qtime[0] + ticks - p->zzstart;
     }
     release(&p->lock);
   }
@@ -810,8 +818,6 @@ wakeup1(struct proc *p)
     p->state = RUNNABLE;
     // should be moved to Q2
     p->change = 3;
-    // total sleep time = existing sleep'd time + waketime - zzstart
-    p->Qtime[0] = p->Qtime[0] + ticks - p->zzstart;
   }
 }
 
@@ -834,8 +840,6 @@ int kill(int pid)
         p->state = RUNNABLE;
         // should be moved to Q2
         p->change = 3;
-        // total sleep time = existing sleep'd time + waketime - zzstart
-        p->Qtime[0] = p->Qtime[0] + ticks - p->zzstart;
       }
       release(&p->lock);
       return 0;

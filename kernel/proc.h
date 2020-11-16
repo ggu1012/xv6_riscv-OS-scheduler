@@ -121,11 +121,4 @@ struct proc
   // change = 3  Q0|Q1 to Q2
   int Qtime[3];
   int priority;
-
-  // Since sleep() locks ticks variable,
-  // sleep time should be counted as follows.
-  // sleep time = (sleep end time) - (sleep start time)
-  // zzstart means sleep start time
-  // ZOMBIE time uses same method
-  int zzstart;
 };
