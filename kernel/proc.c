@@ -21,6 +21,11 @@ struct proc *Q[3][NPROC];
 
 // records queue which process was executed
 // in a time slice
+int pid[64];
+
+// pid[tail] is updated at every execution
+// for checking if it owned whole time slice
+int tail = 0;
 
 struct proc *initproc;
 
@@ -643,6 +648,16 @@ void scheduler(void)
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
+      
+      /*        Time Interrupt logic        */
+      // pid array is filled with pid of processes that
+      // executed in one time slice, in specific, 1ms.
+      // if pid is filled with all the same pid and its priority = 2,
+      // the process used its allotment and should be moved to 1.
+
+        // update pid array with its pid
+        pid[tail] = p->pid;
+        tail++;
 
         c->proc = 0;
       }
@@ -671,6 +686,11 @@ void scheduler(void)
       p->state = RUNNING;
       c->proc = p;
       swtch(&c->context, &p->context);
+
+      // update pid array with its pid
+      pid[tail] = p->pid;
+      tail++;
+
       c->proc = 0;
     }
     release(&p->lock);
@@ -711,17 +731,33 @@ void yield(void)
 {
   struct proc *p = myproc();
 
-  printf("Q%d %s %d\n", p->priority, p->name, ticks);
+  // down = 1 -> process should be moved from Q2 to Q1
+  int down = 1;
 
   acquire(&p->lock);
   p->state = RUNNABLE;
 
-  // If priority = 2,
-  // it means process used all interval in Q2
-  // so goes down to Q[1] process
+  // check priority for case Q2 -> Q1
   if (p->priority == 2)
   {
-    p->change = 1;
+    // Is process 'p' used its whole allotment?
+    // check pid array from head to tail
+    for(int i=0; i<tail; i++)
+    {
+      // if some pid is different to p->pid,
+      // it means p did not use whole time slice
+      if(pid[i] != p->pid)
+        down = 0;
+      // Reset pid array for recording next time slice
+      pid[i] = 0;
+    }
+    // Move Q2 to Q1 
+    // when the condition written above is achieved
+    if(down)
+      p->change = 1;
+
+    // reset tail var. for recording next time slice
+    tail = 0;
   }
 
   sched();
