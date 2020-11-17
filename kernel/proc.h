@@ -120,5 +120,7 @@ struct proc
   // change = 2  Q2|Q1 to Q0
   // change = 3  Q0|Q1 to Q2
   int Qtime[3];
-  int priority;
+
+  // process is in Q(priority) queue
+  int priority;  
 };
