@@ -599,6 +599,19 @@ void scheduler(void)
     for (p = proc; p < &proc[NPROC]; p++)
     {
       acquire(&p->lock);
+      
+      // to check the execution time portion
+      // if p->state is not UNUSED, check which queue it is in,
+      // and count its time
+      if (p->state != UNUSED)
+      {
+        if (p->priority == 2)
+          (p->Qtime[2])++;
+        else if (p->priority == 1)
+          (p->Qtime[1])++;
+        else if (p->priority == 0)
+          (p->Qtime[0])++;
+      }
 
       // proc.h
       // change = 1  Q2 to Q1
@@ -615,19 +628,6 @@ void scheduler(void)
       case 3:
         movequeue(p, 2, MOVE);
         break;
-      }
-
-      // to check the execution time portion
-      // if p->state is not UNUSED, check which queue it is in,
-      // and count its time
-      if (p->state != UNUSED)
-      {
-        if (p->priority == 2)
-          (p->Qtime[2])++;
-        else if (p->priority == 1)
-          (p->Qtime[1])++;
-        else if (p->priority == 0)
-          (p->Qtime[0])++;
       }
 
       release(&p->lock);
