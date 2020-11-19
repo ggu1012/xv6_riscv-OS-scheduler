@@ -115,11 +115,9 @@ struct proc
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
 
-  int change;
-  // change = 1  Q2 to Q1
-  // change = 2  Q2|Q1 to Q0
-  // change = 3  Q0|Q1 to Q2
   int Qtime[3];
+
+  int start, end;
 
   // process is in Q(priority) queue
   int priority;  

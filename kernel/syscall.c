@@ -7,6 +7,9 @@
 #include "syscall.h"
 #include "defs.h"
 
+// movequeue from proc.c
+extern void movequeue(struct proc *obj, int priority, int opt);
+
 // Fetch the uint64 at addr from the current process.
 int fetchaddr(uint64 addr, uint64 *ip)
 {
@@ -134,8 +137,12 @@ void syscall(void)
   // when syscall is invoked and
   // its priority was not 2,
   // move to Q2 process
-  if(p->priority != 2)
-    p->change = 3;
+  if (p->priority != 2) 
+  {
+    acquire(&p->lock);
+    movequeue(p, 2, 0);
+    release(&p->lock);
+  }
 
   num = p->trapframe->a7;
   if (num > 0 && num < NELEM(syscalls) && syscalls[num])

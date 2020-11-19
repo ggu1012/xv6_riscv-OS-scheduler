@@ -41,7 +41,10 @@ extern char trampoline[]; // trampoline.S
 // Calculate time portion
 void getportion(struct proc *p)
 {
-  int total = p->Qtime[2] + p->Qtime[1] + p->Qtime[0];
+  int total = p->end - p->start;
+  p->Qtime[0] = total - (p->Qtime[2] + p->Qtime[1]);
+
+  printf("%d %d %d\n", p->Qtime[2], p->Qtime[1], p->Qtime[0]);
   p->Qtime[2] = p->Qtime[2] * 100 / total;
   p->Qtime[1] = p->Qtime[1] * 100 / total;
   p->Qtime[0] = p->Qtime[0] * 100 / total;
@@ -88,9 +91,6 @@ void movequeue(struct proc *obj, int priority, int opt)
     Q[priority][endstart] = obj;
     obj->priority = priority;
   }
-
-  // reset change variable
-  obj->change = 0;
 }
 
 // initialize the proc table at boot time.
@@ -206,6 +206,9 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  p->start = ticks;
+  movequeue(p, 2, INSERT);
+
   return p;
 }
 
@@ -215,6 +218,7 @@ found:
 static void
 freeproc(struct proc *p)
 {
+  p->end = ticks;
   getportion(p);
 
   // Print out the runtime stats of queue occupancy.
@@ -237,7 +241,6 @@ freeproc(struct proc *p)
   p->state = UNUSED;
 
   // reset added variables for this assignment
-  p->change = 0;
   p->Qtime[2] = 0;
   p->Qtime[1] = 0;
   p->Qtime[0] = 0;
@@ -323,9 +326,6 @@ void userinit(void)
 
   p->state = RUNNABLE;
 
-  // insert init process in Q2
-  movequeue(p, 2, INSERT);
-
   // set timer
   p->Qtime[2] = 0;
   p->Qtime[1] = 0;
@@ -399,9 +399,6 @@ int fork(void)
   pid = np->pid;
 
   np->state = RUNNABLE;
-
-  // insert new process in Q2
-  movequeue(np, 2, INSERT);
 
   // set timer
   np->Qtime[2] = 0;
@@ -502,7 +499,7 @@ void exit(int status)
   // when it is zombie,
   // should be moved to Q0
   // ZOMBIE time count starts
-  p->change = 2;
+  movequeue(p, 0, MOVE);
 
   release(&original_parent->lock);
 
@@ -595,43 +592,6 @@ void scheduler(void)
     intr_on();
     // Avoid deadlock by ensuring that devices can interrupt.
 
-    // First, handle the priority change of the processes
-    for (p = proc; p < &proc[NPROC]; p++)
-    {
-      acquire(&p->lock);
-      
-      // to check the execution time portion
-      // if p->state is not UNUSED, check which queue it is in,
-      // and count its time
-      if (p->state != UNUSED)
-      {
-        if (p->priority == 2)
-          (p->Qtime[2])++;
-        else if (p->priority == 1)
-          (p->Qtime[1])++;
-        else if (p->priority == 0)
-          (p->Qtime[0])++;
-      }
-
-      // proc.h
-      // change = 1  Q2 to Q1
-      // change = 2  Q2|Q1 to Q0
-      // change = 3  Q0|Q1 to Q2
-      switch (p->change)
-      {
-      case 1:
-        movequeue(p, 1, MOVE);
-        break;
-      case 2:
-        movequeue(p, 0, MOVE);
-        break;
-      case 3:
-        movequeue(p, 2, MOVE);
-        break;
-      }
-
-      release(&p->lock);
-    }
 
     // handle Q2 processes first
     // find where the Q2 queue ends
@@ -642,18 +602,22 @@ void scheduler(void)
     for (int i = 0; i <= tail2; i++)
     {
       p = Q[2][i];
+
+      if (p==0)
+        break;
+
       acquire(&p->lock);
       if (p->state == RUNNABLE)
       {
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
-      
-      /*        Time Interrupt logic        */
-      // pid array is filled with pid of processes that
-      // executed in one time slice, in specific, 1ms.
-      // if pid is filled with all the same pid and its priority = 2,
-      // the process used its allotment and should be moved to 1.
+
+        /*        Time Interrupt logic        */
+        // pid array is filled with pid of processes that
+        // executed in one time slice, in specific, 1ms.
+        // if pid is filled with all the same pid and its priority = 2,
+        // the process used its allotment and should be moved to 1.
 
         // update pid array with its pid
         pid[tail] = p->pid;
@@ -697,6 +661,7 @@ void scheduler(void)
 
     // move to the next Q[1] process
     exec++;
+    
   }
 }
 
@@ -740,7 +705,9 @@ void yield(void)
   // check priority for case Q2 -> Q1
   if (p->priority == 2)
   {
-    // Is process 'p' used its whole allotment?
+
+    p->Qtime[2]++;
+    // Did process 'p' used its whole allotment?
     // check pid array from head to tail
     for(int i=0; i<tail; i++)
     {
@@ -753,11 +720,16 @@ void yield(void)
     }
     // Move Q2 to Q1 
     // when the condition written above is achieved
-    if(down)
-      p->change = 1;
+    if (down)
+      movequeue(p, 1, MOVE);
 
-    // reset tail var. for recording next time slice
-    tail = 0;
+    // reset tail var. for recording next time slice   
+    tail = 0;     
+  }
+
+  else if(p->priority == 1)
+  {
+    p->Qtime[1]++;
   }
 
   sched();
@@ -808,7 +780,7 @@ void sleep(void *chan, struct spinlock *lk)
   p->state = SLEEPING;
 
   // move from Q2|Q1 to Q0
-  p->change = 2;
+  movequeue(p, 0, MOVE);
 
   sched();
 
@@ -827,7 +799,7 @@ void sleep(void *chan, struct spinlock *lk)
 // Must be called without any p->lock.
 void wakeup(void *chan)
 {
-  struct proc *p;
+  struct proc *p; 
 
   for (p = proc; p < &proc[NPROC]; p++)
   {
@@ -836,7 +808,7 @@ void wakeup(void *chan)
     {
       p->state = RUNNABLE;
       // should be moved to Q2
-      p->change = 3;
+      movequeue(p, 2, MOVE);
     }
     release(&p->lock);
   }
@@ -853,7 +825,7 @@ wakeup1(struct proc *p)
   {
     p->state = RUNNABLE;
     // should be moved to Q2
-    p->change = 3;
+    movequeue(p, 2, MOVE);
   }
 }
 
@@ -875,7 +847,7 @@ int kill(int pid)
         // Wake process from sleep().
         p->state = RUNNABLE;
         // should be moved to Q2
-        p->change = 3;
+        movequeue(p, 2, MOVE);
       }
       release(&p->lock);
       return 0;
