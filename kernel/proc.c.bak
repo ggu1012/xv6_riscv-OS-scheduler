@@ -12,11 +12,20 @@
 #define DELETE 2 // delete process from the queue
 
 struct cpu cpus[NCPU];
+
 struct proc proc[NPROC];
 
 // Three-level queue
-// each queue can have max. 64 procs
+// each queue has 64 processes
 struct proc *Q[3][NPROC];
+
+// records queue which process was executed
+// in a time slice
+int pid[64];
+
+// pid[tail] is updated at every execution
+// for checking if it owned whole time slice
+int tail = 0;
 
 struct proc *initproc;
 
@@ -35,9 +44,10 @@ void getportion(struct proc *p)
   int total = p->end - p->start;
   p->Qtime[0] = total - (p->Qtime[2] + p->Qtime[1]);
 
-  // p->Qtime[2] = p->Qtime[2] * 100 / total;
-  // p->Qtime[1] = p->Qtime[1] * 100 / total;
-  // p->Qtime[0] = p->Qtime[0] * 100 / total;
+  printf("%d %d %d\n", p->Qtime[2], p->Qtime[1], p->Qtime[0]);
+  p->Qtime[2] = p->Qtime[2] * 100 / total;
+  p->Qtime[1] = p->Qtime[1] * 100 / total;
+  p->Qtime[0] = p->Qtime[0] * 100 / total;
 }
 
 // find where 'obj' process resides in
@@ -583,21 +593,18 @@ void scheduler(void)
     intr_on();
     // Avoid deadlock by ensuring that devices can interrupt.
 
+
     // handle Q2 processes first
     // find where the Q2 queue ends
-    int Q2_tail = findproc(0, 2);
-    // Now, Q[2][Q2_tail] means the tail process in Q2
+    int tail2 = findproc(0, 2) - 1;
+    // Now, Q[2][tail2] means the tail process in Q2
 
     // execute Q2 processes
-    // RR manner in the queue
-    for (int i = 0; i < Q2_tail; i++)
+    for (int i = 0; i <= tail2; i++)
     {
       p = Q[2][i];
 
-      // if there is no process in Q2,
-      // p would be NULL pointer
-      // in this case, break to go to execute Q1 process
-      if (p == 0)
+      if (p==0)
         break;
 
       acquire(&p->lock);
@@ -606,6 +613,17 @@ void scheduler(void)
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
+
+        /*        Time Interrupt logic        */
+        // pid array is filled with pid of processes that
+        // executed in one time slice, in specific, 1ms.
+        // if pid is filled with all the same pid and its priority = 2,
+        // the process used its allotment and should be moved to 1.
+
+        // update pid array with its pid
+        pid[tail] = p->pid;
+        tail++;
+
         c->proc = 0;
       }
       release(&p->lock);
@@ -613,13 +631,13 @@ void scheduler(void)
 
     // After that, handle "one" Q1 process (Q[1][exec])
     // Q1 process is determined with the algorithm
-    // written in '2. Scheduling part'
+    // written in 2 Scheduling part
 
     p = Q[1][exec];
 
     // if Q[1][exec] == 0,
-    // it means p has reached end of Q[1], or Q[1] is empty, 
-    // so skip below part to avoid NULL process
+    // it means p reached end of Q[1]
+    // or Q[1] is empty, so continue to avoid executing NULL pointer
     if (p == 0)
     {
       exec = 0;
@@ -632,14 +650,19 @@ void scheduler(void)
     {
       p->state = RUNNING;
       c->proc = p;
-      swtch(&c->context, &p->context);   
+      swtch(&c->context, &p->context);
+
+      // update pid array with its pid
+      pid[tail] = p->pid;
+      tail++;
+
       c->proc = 0;
     }
     release(&p->lock);
 
     // move to the next Q[1] process
-    exec++;   
-      
+    exec++;
+    
   }
 }
 
@@ -674,19 +697,40 @@ void yield(void)
 {
   struct proc *p = myproc();
 
+  // down = 1 -> process should be moved from Q2 to Q1
+  int down = 1;
+
   acquire(&p->lock);
   p->state = RUNNABLE;
 
   // check priority for case Q2 -> Q1
   if (p->priority == 2)
   {
-    movequeue(p, 1, MOVE);
-    p->Qtime[2] = p->Qtime[2] + 1;
+    p->Qtime[2]++;
+    // Did process 'p' used its whole allotment?
+    // check pid array from head to tail
+    for(int i=0; i<tail; i++)
+    {
+      // if some pid is different to p->pid,
+      // it means p did not use whole time slice
+      if(pid[i] != p->pid)
+        down = 0;
+      // Reset pid array for recording next time slice
+      pid[i] = 0;
+    }
+    // Move Q2 to Q1 
+    // when the condition written above is achieved
+    if (down)
+      movequeue(p, 1, MOVE);
+
+    // reset tail var. for recording next time slice   
+    tail = 0;     
   }
 
   else if(p->priority == 1)
-    p->Qtime[1] = p->Qtime[1] + 1;
-    
+  {
+    p->Qtime[1]++;
+  }
 
   sched();
   release(&p->lock);
