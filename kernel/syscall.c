@@ -141,6 +141,12 @@ void syscall(void)
   {
     acquire(&p->lock);
     movequeue(p, 2, 0);
+
+    // start Q2 timer, end Q1 timer
+    p->Qinterval[2] = ticks;
+    p->Qinterval[1] = ticks - p->Qinterval[1];
+    p->Qtime[1] += p->Qinterval[1];
+    
     release(&p->lock);
   }
 

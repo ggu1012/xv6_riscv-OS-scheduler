@@ -117,6 +117,19 @@ struct proc
 
   /* Assignment 4 */
   int Qtime[3];                // Execution time of each queue
-  int start, end;              // start and end time of this process
+  int Qinterval[3];            // Inteval between queue enter time and exit time
   int priority;                // process is in Q(priority) queue
+
+
+  /*                           How Timer Works                           */
+  /* When the process enters another queue, (eg. Q[new] -> Q[old])
+   * Qinterval[new] records the time when the process enters Q[new].
+   * At the same time, Qinterval[old] is wrapped up as follows.
+   * Qinterval[old] = Queue exit time - Queue enter time
+   *                =    ticks        -  Qinterval[old]
+   * Then, Qinterval would take the valid interval.
+   * Qtime[old] can be obtained by adding Qinterval[old] to Qtime[old].
+   * Qinterval[new] would work as Qinterval[old] in next queue change moment.
+  */
+
 };
