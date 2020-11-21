@@ -33,11 +33,10 @@ extern char trampoline[]; // trampoline.S
 void getportion(struct proc *p)
 {
   int total = p->end - p->start;
-  p->Qtime[0] = total - (p->Qtime[2] + p->Qtime[1]);
 
-  // p->Qtime[2] = p->Qtime[2] * 100 / total;
-  // p->Qtime[1] = p->Qtime[1] * 100 / total;
-  // p->Qtime[0] = p->Qtime[0] * 100 / total;
+  p->Qtime[2] = p->Qtime[2] * 100 / total;
+  p->Qtime[1] = p->Qtime[1] * 100 / total;
+  p->Qtime[0] = 100 - (p->Qtime[1] + p->Qtime[2]);
 }
 
 // find where 'obj' process resides in
@@ -583,20 +582,18 @@ void scheduler(void)
     intr_on();
     // Avoid deadlock by ensuring that devices can interrupt.
 
-    // handle Q2 processes first
-    // find where the Q2 queue ends
-    int Q2_tail = findproc(0, 2);
-    // Now, Q[2][Q2_tail] means the tail process in Q2
-
+    
     // execute Q2 processes
     // RR manner in the queue
-    for (int i = 0; i < Q2_tail; i++)
+    // findproc(0,2) finds NULL process in the queue
+    // which indicates the tail of the queue
+    for (int i = 0; i < findproc(0, 2); i++)
     {
       p = Q[2][i];
 
       // if there is no process in Q2,
       // p would be NULL pointer
-      // in this case, break to go to execute Q1 process
+      // in this case, break to directly execute Q1 process
       if (p == 0)
         break;
 
